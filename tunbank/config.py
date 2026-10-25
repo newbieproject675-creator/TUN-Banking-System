@@ -249,6 +249,7 @@ DEFAULTS: dict[str, tuple[str, str]] = {
     "disburse_live_kinds": ("", "Which disbursements may actually SEND, comma separated: RAWS, WARCHEST_GRANT, CITY_GRANT, INFRA_GRANT, LAND_GRANT (empty = previews only)"),
     "disburse_ignore_tag": ("1", "1 = alliance-funded transfers carry the donation note (#ignore) in PnW so they are never treated as a member's deposit or withdrawal"),
     "disburse_max_nations": ("50", "Most nations one /transfer or /grant command may include"),
+    "pnw_rule_overrides": ("{}", "Corrections to the built-in game rules, as JSON. Change them with /grantset rule, not by hand"),
     "external_withdrawal_mode": ("auto", "auto = deduct a member's balance when money leaves the offshore for them outside TUN Bank (only when confident) · review = always ask ECON first · off = old behaviour (warning only)"),
     "external_withdrawal_exclude_words": ("grant,payment,payout,reimburs,refund,supplier,supply,loan,bounty,prize,reward,salary,expense,warchest,war chest,project,trade,rebuild", "Notes containing any of these words are never deducted automatically (comma separated); they go to ECON review"),
     "external_withdrawal_exempt_nations": ("", "Nation ids (comma separated) that are never charged automatically, e.g. nations that receive alliance expense payments"),

@@ -100,6 +100,7 @@ SETTINGS: dict = {
     "grant_land_max_usd": S(G_GRANTS, "Land grant cap", "usd", "Largest land grant to one nation", zero="No cap"),
     "grant_city_max_usd": S(G_GRANTS, "City grant cap", "usd", "Largest city grant to one nation", zero="No cap"),
     "daily_cash_threshold": S(G_GRANTS, "Daily-bonus cash threshold", "usd", "Used by the no_daily_cash option of /transfer raws", zero="Not set"),
+    "pnw_rule_overrides": S(G_GRANTS, "Game-rule corrections", "hidden", "Change with /grantset rule"),
     "disburse_live_kinds": S(G_GRANTS, "Disbursements allowed to send", "words", "Empty = previews only. Change with /grantset live"),
     "disburse_ignore_tag": S(G_GRANTS, "Mark alliance-funded transfers as donations", "toggle", "Adds the donation note so they are not treated as a member's deposit"),
     "disburse_max_nations": S(G_GRANTS, "Most nations per command", "count", "Safety limit for one /transfer or /grant command"),

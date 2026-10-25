@@ -1,106 +1,142 @@
 """Politics & War rules used to calculate transfers and grants. PURE FUNCTIONS: no database, no network, no Discord.
 
-!!  RULES_VERSION below is "unverified".  These numbers are the bot author's understanding of the game's rules; they could
-!!  not be checked against the live game when this was written. Compare a few previews with the game / Locutus before
-!!  enabling sending (/grantset live), and edit the constants here if the game differs or changes. Every preview prints the
-!!  rules version and every assumption, and a nation whose data is incomplete is flagged for review - never guessed.
+!!  RULES_VERSION is "unverified": these numbers are the author's best knowledge of the game and Locutus, and they could not be
+!!  checked against the live game. EVERY number below is a key in DEFAULT_RULES and can be corrected from Discord with
+!!  `/grantset rule` (no new deployment): see `/grantset rules` for the values in force. Every preview prints the version, the
+!!  discounts/bonuses it applied, and a per-resource breakdown (uses / produces / net) to compare with Locutus.
 
-What is deliberately NOT modelled (the preview says so): a nation's own production (mines, farms, refineries output) is not
-subtracted from what it needs; domestic-policy and war-time effects are not applied; seasonal/radiation effects on food are not
-applied. `only_missing` (deducting the verified stockpile) is the only netting.
+RAWS follow Locutus: what a nation needs is its consumption MINUS what its own buildings produce (mines, farms, refineries,
+with the project bonuses), over the number of days. Nothing is needed for a resource the nation produces enough of.
+CASH is the nation's gross building + military upkeep: its tax income cannot be reconstructed from the API, so it is NOT subtracted
+(use `no_cash`, or `only_missing` to net the cash it holds).
+Not modelled (the preview says so): seasons and radiation (food), wartime effects, the nation's tax income.
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
 from . import money as M
 
-RULES_VERSION = "pnw-rules-2026-10-UNVERIFIED-1"
+RULES_VERSION = "pnw-rules-2026-10-UNVERIFIED-2"
 D = Decimal
 
-# ----------------------------------------------------------------------------------------------- power
-# building -> (resource used, infrastructure one plant can power, resource used per infrastructure point per day)
-POWER_PLANTS = {
-    "wind_power": (None, 250, D(0)),
-    "nuclear_power": ("uranium", 2000, D("2.4") / 1000),
-    "coal_power": ("coal", 500, D("1.2") / 100),
-    "oil_power": ("oil", 500, D("1.2") / 100),
-}
+
+def _build_defaults() -> dict:
+    r: dict = {}
+    # ---- power: capacity = infrastructure one plant can power; use = resource per infrastructure point per day
+    r.update({"power.coal.capacity": 500, "power.coal.use_per_100_infra": "1.2", "power.oil.capacity": 500, "power.oil.use_per_100_infra": "1.2",
+              "power.nuclear.capacity": 2000, "power.nuclear.use_per_1000_infra": "2.4", "power.wind.capacity": 250})
+    # ---- factories (per building per day)
+    r.update({"factory.oil_refinery.oil": 3, "factory.oil_refinery.gasoline": 6, "factory.steel_mill.coal": 3, "factory.steel_mill.iron": 3,
+              "factory.steel_mill.steel": 9, "factory.aluminum_refinery.bauxite": 3, "factory.aluminum_refinery.aluminum": 9,
+              "factory.munitions_factory.lead": 6, "factory.munitions_factory.munitions": 18})
+    # ---- mines and farms (per building per day)
+    for res in ("coal", "oil", "uranium", "iron", "bauxite", "lead"):
+        r[f"mine.{res}"] = 3
+    r.update({"farm.land_per_unit": 500, "farm.food_per_unit": 12})
+    # ---- project bonuses to production (added to 1.0)
+    r.update({"bonus.uranium_enrichment_program": 1, "bonus.iron_works": "0.36", "bonus.bauxite_works": "0.36", "bonus.arms_stockpile": "0.34",
+              "bonus.emergency_gasoline_reserve": "0.36", "bonus.mass_irrigation": "0.25"})
+    # ---- food
+    r.update({"food.per_person": "0.001", "food.per_soldier": "0.002"})
+    # ---- cash upkeep per building per day, and per military unit per day
+    for b, v in {"coal_power": 1200, "oil_power": 1800, "nuclear_power": 10500, "wind_power": 500, "coal_mine": 400, "oil_well": 600,
+                 "uranium_mine": 5000, "iron_mine": 1600, "bauxite_mine": 1600, "lead_mine": 1500, "farm": 300, "police_station": 750,
+                 "hospital": 1000, "recycling_center": 2500, "subway": 3250, "supermarket": 600, "bank": 1800, "shopping_mall": 5400,
+                 "stadium": 12150, "oil_refinery": 4000, "aluminum_refinery": 2500, "steel_mill": 4000, "munitions_factory": 3500,
+                 "barracks": 1500, "factory": 3000, "hangar": 4000, "drydock": 5000}.items():
+        r[f"upkeep.{b}"] = v
+    for u, v in {"soldiers": "1.25", "tanks": 50, "aircraft": 500, "ships": 3375, "missiles": 21000, "nukes": 31500, "spies": 2400}.items():
+        r[f"upkeep.military.{u}"] = v
+    # ---- purchase prices
+    r.update({"city.cubic": 50000, "city.linear": 150000, "city.constant": 75000,
+              "infra.divisor": 710, "infra.exponent": "2.2", "infra.base": 300, "infra.offset": 10,
+              "land.coefficient": "0.002", "land.offset": 20, "land.base": 50})
+    # ---- discounts (a fraction taken off the price; the ones that apply are ADDED together)
+    r.update({"discount.city.urban_planning": "0.05", "discount.city.advanced_urban_planning": "0.05", "discount.city.metropolitan_planning": "0.05",
+              "discount.city.government_support_agency": "0.025", "discount.city.policy.MANIFEST_DESTINY": "0.05",
+              "discount.infra.center_for_civil_engineering": "0.05", "discount.infra.advanced_engineering_corps": "0.05",
+              "discount.land.center_for_civil_engineering": "0.05", "discount.land.advanced_engineering_corps": "0.05"})
+    return {k: D(str(v)) for k, v in r.items()}
+
+
+DEFAULT_RULES = _build_defaults()
+_OVERRIDES: dict = {}
+
+
+def load_overrides(text: str | None) -> None:
+    """Install the admin's corrections (a JSON object of {rule key: number}). Unknown keys and bad values are ignored, never trusted."""
+    _OVERRIDES.clear()
+    try:
+        raw = json.loads(text or "{}")
+    except ValueError:
+        return
+    for k, v in (raw or {}).items():
+        if k in DEFAULT_RULES:
+            try:
+                _OVERRIDES[k] = D(str(v))
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def overrides() -> dict:
+    return dict(_OVERRIDES)
+
+
+def rule(key: str) -> D:
+    return _OVERRIDES.get(key, DEFAULT_RULES[key])
+
+
+# ----------------------------------------------------------------------------------------------- derived structures
 POWER_ORDER = ("wind_power", "nuclear_power", "coal_power", "oil_power")      # assumption when plant types are mixed in one city
-
-# ----------------------------------------------------------------------------------------------- factories (inputs per building per day)
-MANUFACTURING_INPUTS = {
-    "oil_refinery": {"oil": D(3)},
-    "steel_mill": {"coal": D(3), "iron": D(3)},
-    "aluminum_refinery": {"bauxite": D(3)},
-    "munitions_factory": {"lead": D(6)},
-}
-
-# ----------------------------------------------------------------------------------------------- cash upkeep per building per day
-BUILDING_CASH_UPKEEP = {
-    "coal_power": D(1200), "oil_power": D(1800), "nuclear_power": D(10500), "wind_power": D(500),
-    "coal_mine": D(400), "oil_well": D(600), "uranium_mine": D(5000), "iron_mine": D(1600), "bauxite_mine": D(1600),
-    "lead_mine": D(1500), "farm": D(300),
-    "police_station": D(750), "hospital": D(1000), "recycling_center": D(2500), "subway": D(3250),
-    "supermarket": D(600), "bank": D(1800), "shopping_mall": D(5400), "stadium": D(12150),
-    "oil_refinery": D(4000), "aluminum_refinery": D(2500), "steel_mill": D(4000), "munitions_factory": D(3500),
-    "barracks": D(1500), "factory": D(3000), "hangar": D(4000), "drydock": D(5000),
-}
-ALL_BUILDINGS = tuple(BUILDING_CASH_UPKEEP)
-
-# ----------------------------------------------------------------------------------------------- military (cash upkeep per unit per day)
-MILITARY_CASH_UPKEEP = {"soldiers": D("1.25"), "tanks": D(50), "aircraft": D(500), "ships": D(3375),
-                        "missiles": D(21000), "nukes": D(31500), "spies": D(2400)}
-
-# ----------------------------------------------------------------------------------------------- food
-FOOD_PER_PERSON_PER_DAY = D(1) / 1000
-FOOD_PER_SOLDIER_PER_DAY = D(1) / 500
-
-# ----------------------------------------------------------------------------------------------- purchase prices
-CITY_DISCOUNT_PROJECTS = {"urban_planning": D("0.05"), "advanced_urban_planning": D("0.05"), "metropolitan_planning": D("0.05")}
-INFRA_DISCOUNT_PROJECTS = {"center_for_civil_engineering": D("0.05"), "advanced_engineering_corps": D("0.05")}
-LAND_DISCOUNT_PROJECTS = {"center_for_civil_engineering": D("0.05"), "advanced_engineering_corps": D("0.05")}
+ALL_BUILDINGS = tuple(k[len("upkeep."):] for k in DEFAULT_RULES if k.startswith("upkeep.") and not k.startswith("upkeep.military."))
+MILITARY_CASH_UPKEEP = {k[len("upkeep.military."):]: v for k, v in DEFAULT_RULES.items() if k.startswith("upkeep.military.")}
+PRODUCTION_PROJECTS = ("uranium_enrichment_program", "iron_works", "bauxite_works", "arms_stockpile", "emergency_gasoline_reserve", "mass_irrigation")
+CITY_DISCOUNT_PROJECTS = tuple(k.split(".")[-1] for k in DEFAULT_RULES if k.startswith("discount.city.") and ".policy." not in k)
+INFRA_DISCOUNT_PROJECTS = tuple(k.split(".")[-1] for k in DEFAULT_RULES if k.startswith("discount.infra."))
+LAND_DISCOUNT_PROJECTS = tuple(k.split(".")[-1] for k in DEFAULT_RULES if k.startswith("discount.land."))
+ALL_PROJECTS = tuple(dict.fromkeys(PRODUCTION_PROJECTS + CITY_DISCOUNT_PROJECTS + INFRA_DISCOUNT_PROJECTS + LAND_DISCOUNT_PROJECTS))
 
 
 def city_price(current_cities: int) -> D:
     """Price of the NEXT city when the nation owns `current_cities` (before discounts)."""
     c = D(current_cities)
-    return D(50000) * (c - 1) ** 3 + D(150000) * c + D(75000)
+    return rule("city.cubic") * (c - 1) ** 3 + rule("city.linear") * c + rule("city.constant")
 
 
 def infra_unit_price(level) -> D:
     """Price of one infrastructure point bought while at `level` (before discounts)."""
-    return D(str(abs(float(level) - 10) ** 2.2 / 710 + 300))
+    return D(str(abs(float(level) - float(rule("infra.offset"))) ** float(rule("infra.exponent")) / float(rule("infra.divisor"))
+                 + float(rule("infra.base"))))
 
 
 def land_unit_price(level) -> D:
     """Price of one acre bought while at `level` (before discounts)."""
-    return D(str(0.002 * (float(level) - 20) ** 2 + 50))
+    return D(str(float(rule("land.coefficient")) * (float(level) - float(rule("land.offset"))) ** 2 + float(rule("land.base"))))
 
 
 def sheet() -> str:
-    """The rules in plain text for ECON to compare with the game (/grantset rules)."""
-    lines = [f"Rules version: {RULES_VERSION}", "", "POWER (per city, per day)"]
-    for b, (res, cap, rate) in POWER_PLANTS.items():
-        lines.append(f"  {b}: powers {cap} infra" + (f", uses {rate * 100:.3f} {res} per 100 infra" if res else ", uses nothing"))
-    lines.append(f"  mixed plant types are filled in this order: {', '.join(POWER_ORDER)} (assumption)")
-    lines += ["", "FACTORY INPUTS (per building per day)"]
-    for b, inp in MANUFACTURING_INPUTS.items():
-        lines.append(f"  {b}: " + ", ".join(f"{v} {k}" for k, v in inp.items()))
-    lines += ["", "CASH UPKEEP (per building per day)"]
-    lines.append("  " + ", ".join(f"{b} ${v:,}" for b, v in BUILDING_CASH_UPKEEP.items()))
-    lines += ["", "MILITARY CASH UPKEEP (per unit per day)", "  " + ", ".join(f"{u} ${v}" for u, v in MILITARY_CASH_UPKEEP.items())]
-    lines += ["", f"FOOD: {FOOD_PER_PERSON_PER_DAY} per person + {FOOD_PER_SOLDIER_PER_DAY} per soldier, per day (nation's own farms NOT subtracted)",
-              "", "CITY: 50,000*(c-1)^3 + 150,000*c + 75,000 for the next city (c = cities owned now); discounts "
-              + ", ".join(f"{k} {int(v * 100)}%" for k, v in CITY_DISCOUNT_PROJECTS.items()) + " (added together)",
-              "INFRASTRUCTURE: per point 300 + |level-10|^2.2/710, point by point; discounts "
-              + ", ".join(f"{k} {int(v * 100)}%" for k, v in INFRA_DISCOUNT_PROJECTS.items()),
-              "LAND: per acre 0.002*(level-20)^2 + 50, acre by acre; discounts "
-              + ", ".join(f"{k} {int(v * 100)}%" for k, v in LAND_DISCOUNT_PROJECTS.items()),
-              "", "Not modelled: the nation's own production, domestic policies, wartime effects, seasons/radiation."]
-    return "\n".join(lines)
+    """Every rule in force, for ECON to compare with the game and correct with /grantset rule."""
+    out = [f"Rules version: {RULES_VERSION}", "Format: key = value   (* = changed from the built-in value; change with /grantset rule)"]
+    group = None
+    for k in sorted(DEFAULT_RULES):
+        if k.split(".")[0] != group:
+            group = k.split(".")[0]
+            out += ["", f"[{group}]"]
+        mark = "*" if k in _OVERRIDES else " "
+        out.append(f" {mark} {k} = {format(rule(k).normalize(), 'f')}")
+    out += ["", "How they are used:",
+            "  RAWS  need per day = consumption - own production, per resource; x days; rounded UP. Production needs the city to be powered.",
+            "        farm food = farms x land/land_per_unit x food_per_unit x (1 + mass_irrigation); mine output x (1 + project bonus).",
+            "        food use = people x food.per_person + soldiers x food.per_soldier. Cash = gross building + military upkeep.",
+            "  CITY  next city = cubic*(c-1)^3 + linear*c + constant (c = cities owned); discounts are added together and taken off.",
+            "  INFRA per point = base + |level-offset|^exponent / divisor, point by point from each city's own level.",
+            "  LAND  per acre = base + coefficient*(level-offset)^2, acre by acre from each city's own land.",
+            "Not modelled: seasons/radiation, wartime effects, tax income."]
+    return "\n".join(out)
 
 
 # ============================================================================================== results
@@ -128,17 +164,20 @@ def clean(d) -> str:
 
 
 def _units(x: Decimal, *, up: bool = True) -> int:
-    """Decimal PnW amount -> units (hundredths); resources are rounded UP to a whole in-game unit so a nation is never short."""
+    """Decimal PnW amount -> units (hundredths); rounded UP to a whole in-game unit so a nation is never short."""
     if up:
         return int((x.to_integral_value(rounding="ROUND_CEILING")) * M.SCALE)
     return int((x * M.SCALE).quantize(D(1), rounding=ROUND_HALF_UP))
 
 
-def _stock_units(nation: dict) -> dict | None:
+def stock_units(nation: dict) -> dict | None:
     s = nation.get("stock")
     if not s or any(s.get(r) is None for r in M.RESOURCES):
         return None
     return {r: M.to_units(s[r]) for r in M.RESOURCES}
+
+
+_stock_units = stock_units
 
 
 def _cities_ok(nation: dict, calc: Calc) -> list | None:
@@ -153,69 +192,106 @@ def _cities_ok(nation: dict, calc: Calc) -> list | None:
     return cities
 
 
+def _project(nation: dict, name: str, calc: Calc, *, note: bool = True):
+    """True/False for a project, or None (unknown). Unknown is treated as 'does not have it' and the result becomes an ESTIMATE."""
+    v = (nation.get("projects") or {}).get(name)
+    if v is None and note:
+        calc.estimate = True
+        msg = f"ESTIMATE: PnW did not report the project {name}; treated as NOT owned"
+        if msg not in calc.assumptions:
+            calc.assumptions.append(msg)
+    return bool(v)
+
+
+def _policy(nation: dict, calc: Calc) -> str:
+    p = nation.get("policy")
+    if p is None:
+        calc.estimate = True
+        calc.assumptions.append("ESTIMATE: PnW did not report the domestic policy; no policy discount applied")
+        return ""
+    return str(p).strip().upper().replace(" ", "_")
+
+
 # ============================================================================================== raws
 def compute_raws(nation: dict, days, *, include_cash: bool = True, only_missing: bool = False) -> Calc:
-    """What a nation needs to keep operating for `days` days, from its ACTUAL buildings, infrastructure and military."""
+    """What a nation needs to keep operating for `days` days: its consumption minus its own production, from its ACTUAL buildings."""
     days = D(str(days))
     c = Calc(nation_id=nation["id"])
-    c.assumptions += [f"Rules {RULES_VERSION}", "Gross consumption: the nation's own production is NOT subtracted",
-                      "Domestic policy, wartime and radiation/season effects are not applied"]
+    c.assumptions += [f"Rules {RULES_VERSION}", "NET of the nation's own production (mines, farms, refineries, with project bonuses), like Locutus",
+                      "Seasons, radiation and wartime effects are not applied" + ("; cash is GROSS upkeep (tax income is not subtracted)" if include_cash else "")]
+    uses = {r: D(0) for r in M.RESOURCES}
+    makes = {r: D(0) for r in M.RESOURCES}
+    mine_of = {"coal": "coal_mine", "oil": "oil_well", "uranium": "uranium_mine", "iron": "iron_mine", "bauxite": "bauxite_mine", "lead": "lead_mine"}
     cities = _cities_ok(nation, c)
-    per_day = {r: D(0) for r in M.RESOURCES}
     if cities is not None:
+        bonus = {p: (rule(f"bonus.{p}") if _project(nation, p, c) else D(0)) for p in PRODUCTION_PROJECTS}
+        if any(bonus.values()):
+            c.lines.append("Production bonuses: " + ", ".join(f"{p} +{int(v * 100)}%" for p, v in bonus.items() if v))
+        plants = {"wind_power": (None, rule("power.wind.capacity"), D(0)),
+                  "nuclear_power": ("uranium", rule("power.nuclear.capacity"), rule("power.nuclear.use_per_1000_infra") / 1000),
+                  "coal_power": ("coal", rule("power.coal.capacity"), rule("power.coal.use_per_100_infra") / 100),
+                  "oil_power": ("oil", rule("power.oil.capacity"), rule("power.oil.use_per_100_infra") / 100)}
         for city in cities:
-            infra, b = city.get("infrastructure"), city.get("buildings")
-            if infra is None or b is None or any(k not in b for k in ALL_BUILDINGS):
+            infra, land, b = city.get("infrastructure"), city.get("land"), city.get("buildings")
+            if infra is None or land is None or b is None or any(k not in b for k in ALL_BUILDINGS):
                 c.review.append(f"city #{city.get('id')} has incomplete building data")
                 continue
             remaining = D(str(infra))
-            used_here = []
-            capacity = sum(POWER_PLANTS[p][1] * b[p] for p in POWER_PLANTS)
+            notes = []
+            capacity = sum(plants[p][1] * b[p] for p in plants)
             powered = capacity >= infra
             for plant in POWER_ORDER:
-                res, cap, rate = POWER_PLANTS[plant]
-                carried = min(remaining, D(cap * b[plant]))
+                res, cap, rate = plants[plant]
+                carried = min(remaining, cap * b[plant])
                 if carried > 0:
                     remaining -= carried
                     if res:
-                        per_day[res] += carried * rate
-                        used_here.append(f"{plant} x{b[plant]} powers {carried} infra -> {carried * rate:.2f} {res}/day")
-            if len([p for p in POWER_PLANTS if b[p]]) > 1:
+                        uses[res] += carried * rate
+                        notes.append(f"{plant} x{b[plant]} burns {carried * rate:.2f} {res}")
+            if len([p for p in plants if b[p]]) > 1:
                 c.assumptions.append(f"city #{city.get('id')}: mixed power plants, filled in the order {', '.join(POWER_ORDER)}")
-            if powered:
-                for fac, inputs in MANUFACTURING_INPUTS.items():
-                    for res, amt in inputs.items():
-                        if b[fac]:
-                            per_day[res] += amt * b[fac]
-                            used_here.append(f"{fac} x{b[fac]} uses {amt * b[fac]} {res}/day")
+            if not powered:
+                c.assumptions.append(f"city #{city.get('id')} is not fully powered (infra {infra} > capacity {capacity}); its buildings are idle: "
+                                     "no production and no inputs counted")
             else:
-                c.assumptions.append(f"city #{city.get('id')} is not fully powered (infra {infra} > capacity {capacity}); "
-                                     "its factories are idle and use no inputs")
-            c.lines += [f"City #{city.get('id')} (infra {infra}): " + ("; ".join(used_here) if used_here else "no fuel or inputs needed")]
+                for res, bld in mine_of.items():
+                    if b[bld]:
+                        makes[res] += b[bld] * rule(f"mine.{res}") * (1 + (bonus["uranium_enrichment_program"] if res == "uranium" else 0))
+                if b["farm"]:
+                    makes["food"] += b["farm"] * (D(str(land)) / rule("farm.land_per_unit")) * rule("farm.food_per_unit") * (1 + bonus["mass_irrigation"])
+                for fac, out_res, proj in (("oil_refinery", "gasoline", "emergency_gasoline_reserve"), ("steel_mill", "steel", "iron_works"),
+                                           ("aluminum_refinery", "aluminum", "bauxite_works"), ("munitions_factory", "munitions", "arms_stockpile")):
+                    if b[fac]:
+                        for k in DEFAULT_RULES:
+                            if k.startswith(f"factory.{fac}.") and k.split(".")[-1] != out_res:
+                                uses[k.split(".")[-1]] += b[fac] * rule(k)
+                        makes[out_res] += b[fac] * rule(f"factory.{fac}.{out_res}") * (1 + bonus[proj])
+            c.lines.append(f"City #{city.get('id')} (infra {infra}, land {land}): " + ("; ".join(notes) if notes else "no fuel burned"))
             if include_cash:
-                per_day["money"] += sum(BUILDING_CASH_UPKEEP[k] * b[k] for k in ALL_BUILDINGS)
-    # food
+                uses["money"] += sum(rule(f"upkeep.{k}") * b[k] for k in ALL_BUILDINGS)
     pop, mil = nation.get("population"), nation.get("military")
     if pop is None:
         c.review.append("the population is unknown, so food cannot be calculated")
     elif mil is None or mil.get("soldiers") is None:
         c.review.append("the military numbers are unknown, so food and cash upkeep cannot be calculated")
     else:
-        food = D(str(pop)) * FOOD_PER_PERSON_PER_DAY + D(str(mil["soldiers"])) * FOOD_PER_SOLDIER_PER_DAY
-        per_day["food"] += food
-        c.lines.append(f"Food: {pop:,} people + {mil['soldiers']:,} soldiers = {food:.2f}/day")
+        uses["food"] += D(str(pop)) * rule("food.per_person") + D(str(mil["soldiers"])) * rule("food.per_soldier")
     if include_cash:
         if mil is None or any(mil.get(u) is None for u in MILITARY_CASH_UPKEEP):
             if not any("military numbers" in r for r in c.review):
                 c.review.append("the military numbers are unknown, so military cash upkeep cannot be calculated")
         else:
-            m_cash = sum(MILITARY_CASH_UPKEEP[u] * D(str(mil[u])) for u in MILITARY_CASH_UPKEEP)
-            per_day["money"] += m_cash
-            c.lines.append(f"Military cash upkeep: ${m_cash:,.2f}/day")
-    c.requirement = {r: _units(per_day[r] * days) for r in M.RESOURCES if per_day[r] * days > 0}
-    c.inputs = {"days": clean(days), "per_day": {r: str(v) for r, v in per_day.items() if v}, "rules": RULES_VERSION,
-                "cities": nation.get("num_cities"), "include_cash": include_cash}
-    c.stock = _stock_units(nation)
+            uses["money"] += sum(rule(f"upkeep.military.{u}") * D(str(mil[u])) for u in MILITARY_CASH_UPKEEP)
+    need_day = {r: max(D(0), uses[r] - makes[r]) for r in M.RESOURCES}
+    for r in M.RESOURCES:
+        if uses[r] or makes[r]:
+            net = makes[r] - uses[r]
+            c.lines.append(f"{M.LABELS[r]}: uses {uses[r]:.2f}/day, produces {makes[r]:.2f}/day -> "
+                           + (f"needs {-net:.2f}/day" if net < 0 else f"surplus {net:.2f}/day (nothing to send)"))
+    c.requirement = {r: _units(need_day[r] * days) for r in M.RESOURCES if need_day[r] * days > 0}
+    c.inputs = {"days": clean(days), "uses_per_day": {r: str(v) for r, v in uses.items() if v}, "produces_per_day": {r: str(v) for r, v in makes.items() if v},
+                "rules": RULES_VERSION, "overrides": {k: str(v) for k, v in _OVERRIDES.items()}, "cities": nation.get("num_cities"), "include_cash": include_cash}
+    c.stock = stock_units(nation)
     c.amounts = dict(c.requirement)
     if only_missing:
         if c.stock is None:
@@ -231,8 +307,7 @@ def compute_raws(nation: dict, days, *, include_cash: bool = True, only_missing:
 def apply_daily_cash_rule(calc: Calc, nation: dict, threshold_dollars: int) -> None:
     """`no_daily_cash`: never send cash beyond what keeps the nation at or below the daily-bonus threshold. Only ever REDUCES cash.
 
-    Interpretation (documented, please confirm): the daily login bonus is kept by not lifting the nation's cash above the
-    threshold, so cash is sent only up to (threshold - current cash), and none if the nation is already at or above it.
+    Interpretation (documented, please confirm): cash is sent only up to (threshold - current cash), none if already at/above it.
     """
     if "money" not in calc.amounts:
         return
@@ -276,7 +351,7 @@ def compute_warchest(nation: dict, per_city: dict, ratio, *, only_missing: bool 
     for r, u in per_city.items():
         c.requirement[r] = int((D(u) * n * ratio).quantize(D(1), rounding=ROUND_HALF_UP))
         c.lines.append(f"{M.LABELS[r]}: {M.fmt_units(r, u)} per city x {n} cities x ratio {ratio.normalize():f} = {M.fmt_units(r, c.requirement[r])}")
-    c.stock = _stock_units(nation)
+    c.stock = stock_units(nation)
     c.amounts = dict(c.requirement)
     if only_missing:
         if c.stock is None:
@@ -291,42 +366,55 @@ def compute_warchest(nation: dict, per_city: dict, ratio, *, only_missing: bool 
 
 
 # ============================================================================================== city / infrastructure / land
-def _discount(nation: dict, table: dict, calc: Calc) -> D:
-    projects = nation.get("projects") or {}
-    total, unknown = D(0), []
-    for p, pct in table.items():
-        v = projects.get(p)
-        if v is None:
-            unknown.append(p)
-        elif v:
-            total += pct
-            calc.lines.append(f"Discount: {p} -{int(pct * 100)}%")
-    if unknown:
-        calc.estimate = True
-        calc.assumptions.append("ESTIMATE: PnW did not report " + ", ".join(unknown) + "; priced as if the nation does NOT have it")
+def _discount(nation: dict, kind: str, projects: tuple, calc: Calc, *, policies: bool = False) -> D:
+    total = D(0)
+    for p in projects:
+        if _project(nation, p, calc):
+            pct = rule(f"discount.{kind}.{p}")
+            if pct:
+                total += pct
+                calc.lines.append(f"Discount: {p} -{(pct * 100).normalize():f}%")
+    if policies:
+        pol = _policy(nation, calc)
+        key = f"discount.{kind}.policy.{pol}"
+        if pol and key in DEFAULT_RULES and rule(key):
+            total += rule(key)
+            calc.lines.append(f"Discount: domestic policy {pol} -{(rule(key) * 100).normalize():f}%")
     return total
 
 
-def compute_city(nation: dict, how_many: int) -> Calc:
+MAX_CITIES_PER_GRANT = 50          # a typo guard only; the real limit on money is ECON's per-nation cap (/grantset citycap)
+
+
+def compute_city(nation: dict, how_many: int | None = None, up_to: int | None = None) -> Calc:
+    """The money to buy cities. `how_many` = that many NEW cities; `up_to` = buy until the nation owns that many (up_to=25 for a
+    24-city nation is just the 25th city; for a 20-city nation it is cities 21 to 25)."""
     c = Calc(nation_id=nation["id"])
-    c.assumptions += [f"Rules {RULES_VERSION}", "Domestic-policy discounts are not applied (verify in game)",
-                      "Discounts are added together, then taken off the price"]
+    c.assumptions += [f"Rules {RULES_VERSION}", "Discounts are added together, then taken off the price"]
     n = nation.get("num_cities")
     if not n:
         c.review.append("the number of cities is unknown")
         return c
-    if how_many < 1 or how_many > 10:
-        c.review.append("the number of cities must be between 1 and 10")
+    if up_to is not None:
+        if up_to <= n:
+            c.review.append(f"the nation already has {n} cities, so there is no city to buy up to {up_to}")
+            return c
+        how_many = up_to - n
+        c.lines.append(f"Buying up to city #{up_to}: the nation has {n}, so {how_many} new city(ies) (#{n + 1} to #{up_to})")
+    how_many = 1 if how_many is None else how_many
+    if how_many < 1 or how_many > MAX_CITIES_PER_GRANT:
+        c.review.append(f"the number of cities must be between 1 and {MAX_CITIES_PER_GRANT}")
         return c
-    disc = _discount(nation, CITY_DISCOUNT_PROJECTS, c)
+    disc = _discount(nation, "city", CITY_DISCOUNT_PROJECTS, c, policies=True)
     total = D(0)
     for k in range(how_many):
         base = city_price(n + k)
         price = base * (1 - disc)
         total += price
-        c.lines.append(f"City {n + k + 1}: base ${base:,.0f}" + (f" - {int(disc * 100)}% = ${price:,.0f}" if disc else f" = ${price:,.0f}"))
+        c.lines.append(f"City {n + k + 1}: base ${base:,.0f}" + (f" - {(disc * 100).normalize():f}% = ${price:,.0f}" if disc else f" = ${price:,.0f}"))
     c.requirement = c.amounts = {"money": _units(total)}
-    c.inputs = {"cities_now": n, "buying": how_many, "discount": str(disc), "rules": RULES_VERSION}
+    c.inputs = {"cities_now": n, "buying": how_many, "up_to": up_to, "discount": str(disc), "rules": RULES_VERSION,
+                "overrides": {k: str(v) for k, v in _OVERRIDES.items()}}
     return c
 
 
@@ -341,7 +429,7 @@ def compute_infra(nation: dict, target: int) -> Calc:
     cities = _cities_ok(nation, c)
     if cities is None:
         return c
-    disc = _discount(nation, INFRA_DISCOUNT_PROJECTS, c)
+    disc = _discount(nation, "infra", INFRA_DISCOUNT_PROJECTS, c)
     total = D(0)
     for city in cities:
         cur = city.get("infrastructure")
@@ -351,12 +439,11 @@ def compute_infra(nation: dict, target: int) -> Calc:
         if cur >= target:
             c.lines.append(f"City #{city.get('id')}: {cur} (already at or above {target})")
             continue
-        base = _price_range(infra_unit_price, cur, target)
-        cost = base * (1 - disc)
+        cost = _price_range(infra_unit_price, cur, target) * (1 - disc)
         total += cost
         c.lines.append(f"City #{city.get('id')}: {cur} -> {target} = ${cost:,.0f}")
     c.requirement = c.amounts = {"money": _units(total)} if total > 0 else {}
-    c.inputs = {"target": target, "cities": len(cities), "discount": str(disc), "rules": RULES_VERSION}
+    c.inputs = {"target": target, "cities": len(cities), "discount": str(disc), "rules": RULES_VERSION, "overrides": {k: str(v) for k, v in _OVERRIDES.items()}}
     if not c.review and total <= 0:
         c.lines.append("Every city is already at or above the target: nothing to grant.")
     return c
@@ -368,7 +455,7 @@ def compute_land(nation: dict, target: int) -> Calc:
     cities = _cities_ok(nation, c)
     if cities is None:
         return c
-    disc = _discount(nation, LAND_DISCOUNT_PROJECTS, c)
+    disc = _discount(nation, "land", LAND_DISCOUNT_PROJECTS, c)
     total = D(0)
     for city in cities:
         cur = city.get("land")
@@ -378,12 +465,11 @@ def compute_land(nation: dict, target: int) -> Calc:
         if cur >= target:
             c.lines.append(f"City #{city.get('id')}: {cur} (already at or above {target})")
             continue
-        base = _price_range(land_unit_price, math.floor(cur), math.ceil(target))
-        cost = base * (1 - disc)
+        cost = _price_range(land_unit_price, math.floor(cur), math.ceil(target)) * (1 - disc)
         total += cost
         c.lines.append(f"City #{city.get('id')}: {cur} -> {target} acres = ${cost:,.0f}")
     c.requirement = c.amounts = {"money": _units(total)} if total > 0 else {}
-    c.inputs = {"target": target, "cities": len(cities), "discount": str(disc), "rules": RULES_VERSION}
+    c.inputs = {"target": target, "cities": len(cities), "discount": str(disc), "rules": RULES_VERSION, "overrides": {k: str(v) for k, v in _OVERRIDES.items()}}
     if not c.review and total <= 0:
         c.lines.append("Every city is already at or above the target: nothing to grant.")
     return c

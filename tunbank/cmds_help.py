@@ -51,7 +51,8 @@ CATALOG = {
     "grant send": ("banking", "MINISTER"), "grant list": ("banking", "AUDITOR"), "grant view": ("banking", "AUDITOR"),
     # bulk
     "transfer raws": ("disburse", "MINISTER"), "grant warchest": ("disburse", "MINISTER"), "grant city": ("disburse", "MINISTER"),
-    "grant infrastructure": ("disburse", "MINISTER"), "grant land": ("disburse", "MINISTER"),
+    "grant infrastructure": ("disburse", "MINISTER"), "grant land": ("disburse", "MINISTER"), "grant project": ("disburse", "MINISTER"),
+    "grantset projects": ("disburse", "AUDITOR"), "grantset projectimport": ("disburse", "ADMIN"), "grantset rule": ("disburse", "ADMIN"),
     "grantset show": ("disburse", "AUDITOR"), "grantset warchest": ("disburse", "MINISTER"), "grantset infra": ("disburse", "MINISTER"),
     "grantset land": ("disburse", "MINISTER"), "grantset citycap": ("disburse", "MINISTER"), "grantset dailycash": ("disburse", "MINISTER"),
     "grantset rules": ("disburse", "MINISTER"), "grantset live": ("disburse", "ADMIN"), "grantset batch": ("disburse", "AUDITOR"),

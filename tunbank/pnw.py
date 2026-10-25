@@ -43,8 +43,13 @@ class PnWUncertain(PnWError):
 NATION_SCALAR_FIELDS = ("id", "nation_name", "alliance_id", "num_cities", "population", "domestic_policy",
                         "soldiers", "tanks", "aircraft", "ships", "missiles", "nukes", "spies",
                         "money", "coal", "oil", "uranium", "iron", "bauxite", "lead", "gasoline", "munitions", "steel", "aluminum", "food")
-NATION_PROJECT_FIELDS = ("urban_planning", "advanced_urban_planning", "metropolitan_planning",
-                         "center_for_civil_engineering", "advanced_engineering_corps")
+NATION_PROJECT_FIELDS = ("urban_planning", "advanced_urban_planning", "metropolitan_planning", "government_support_agency",
+                         "center_for_civil_engineering", "advanced_engineering_corps", "uranium_enrichment_program", "iron_works",
+                         "bauxite_works", "arms_stockpile", "emergency_gasoline_reserve", "mass_irrigation")
+NATION_OPTIONAL_FIELDS = ("project_timer",)
+# Fields the bot can do without: if PnW says one does not exist it is dropped (and remembered), the value becomes "unknown" and the
+# calculation says so, instead of the whole query failing. Everything else is required.
+UNAVAILABLE_FIELDS: set = set()
 CITY_FIELDS = ("id", "infrastructure", "land", "coal_power", "oil_power", "nuclear_power", "wind_power", "coal_mine", "oil_well",
                "uranium_mine", "iron_mine", "bauxite_mine", "lead_mine", "farm", "police_station", "hospital", "recycling_center",
                "subway", "supermarket", "bank", "shopping_mall", "stadium", "oil_refinery", "aluminum_refinery", "steel_mill",
@@ -367,20 +372,36 @@ class PnWClient:
             _identity.remember(n["id"], n.get("nation_name"), self.s.alliance_id)
         return out
 
-    async def fetch_nations_detail(self, nation_ids) -> dict:
+    async def fetch_nations_detail(self, nation_ids, project_keys=()) -> dict:
         """{nation_id: detail} with current city, building, military, project and stockpile data, for calculating transfers and grants.
 
         A value PnW did not give is None (never 0), so a calculation can tell "unknown" from "none" and flag the nation for review.
         Nations PnW does not return are simply absent from the result. Raises PnWRejected/PnWUncertain like every other read.
         """
+        import re
+
         ids = sorted({int(i) for i in nation_ids})
         out: dict = {}
-        fields = " ".join(NATION_SCALAR_FIELDS + NATION_PROJECT_FIELDS)
-        q = ("query($id:[Int],$first:Int){ nations(id:$id, first:$first){ data{ " + fields
-             + " cities{ " + " ".join(CITY_FIELDS) + " } } } }")
+        project_fields = tuple(dict.fromkeys(NATION_PROJECT_FIELDS + tuple(project_keys)))
+        optional = set(project_fields) | set(NATION_OPTIONAL_FIELDS) | (set(CITY_FIELDS) - {"id", "infrastructure", "land"})
         for i in range(0, len(ids), 20):                      # small pages keep each PnW query light
             chunk = ids[i:i + 20]
-            data = await self.query(q, {"id": chunk, "first": len(chunk)})
+            for _attempt in range(12):
+                nat = [f for f in NATION_SCALAR_FIELDS + project_fields + NATION_OPTIONAL_FIELDS if f not in UNAVAILABLE_FIELDS]
+                cty = [f for f in CITY_FIELDS if f not in UNAVAILABLE_FIELDS]
+                q = ("query($id:[Int],$first:Int){ nations(id:$id, first:$first){ data{ " + " ".join(nat)
+                     + " cities{ " + " ".join(cty) + " } } } }")
+                try:
+                    data = await self.query(q, {"id": chunk, "first": len(chunk)})
+                    break
+                except PnWRejected as exc:
+                    m = re.search(r'Cannot query field "(\w+)"', str(exc))
+                    if not m or m.group(1) not in optional:
+                        raise                                  # a required field, or some other rejection: surface it
+                    UNAVAILABLE_FIELDS.add(m.group(1))
+                    log.warning("PnW has no field %s; continuing without it (it will be treated as unknown)", m.group(1))
+            else:
+                raise PnWRejected("PnW kept rejecting optional fields; giving up")
             for n in (data.get("nations", {}) or {}).get("data") or []:
                 nid = int(n["id"])
                 stock = {r: _float(n.get(r)) for r in RESOURCE_FIELDS}
@@ -395,7 +416,8 @@ class PnWClient:
                     "num_cities": _int(n.get("num_cities")), "population": _int(n.get("population")), "policy": n.get("domestic_policy"),
                     "military": {k: _int(n.get(k)) for k in MILITARY_FIELDS},
                     "stock": None if any(v is None for v in stock.values()) else stock,
-                    "projects": {k: _bool(n.get(k)) for k in NATION_PROJECT_FIELDS},
+                    "projects": {k: _bool(n.get(k)) for k in project_fields},
+                    "project_timer": _int(n.get("project_timer")),
                     "cities": cities,
                 }
                 _identity.remember(nid, n.get("nation_name"), alliance_id)

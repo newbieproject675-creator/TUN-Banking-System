@@ -1,0 +1,412 @@
+{
+ "format": 1,
+ "source": "built-in seed: names, identifiers and a few prerequisites only. NO COSTS are loaded and completeness is NOT verified.",
+ "policy_discounts": {
+  "verified": false,
+  "rules": []
+ },
+ "projects": [
+  {
+   "key": "urban_planning",
+   "name": "Urban Planning",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "advanced_urban_planning",
+   "name": "Advanced Urban Planning",
+   "category": "economy",
+   "cost": null,
+   "requires": [
+    "urban_planning"
+   ],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "metropolitan_planning",
+   "name": "Metropolitan Planning",
+   "category": "economy",
+   "cost": null,
+   "requires": [
+    "advanced_urban_planning"
+   ],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "center_for_civil_engineering",
+   "name": "Center for Civil Engineering",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "advanced_engineering_corps",
+   "name": "Advanced Engineering Corps",
+   "category": "economy",
+   "cost": null,
+   "requires": [
+    "center_for_civil_engineering"
+   ],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "government_support_agency",
+   "name": "Government Support Agency",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "bureau_of_domestic_affairs",
+   "name": "Bureau of Domestic Affairs",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "research_and_development_center",
+   "name": "Research and Development Center",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "resource_production_center",
+   "name": "Resource Production Center",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "iron_works",
+   "name": "Iron Works",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "bauxite_works",
+   "name": "Bauxiteworks",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "arms_stockpile",
+   "name": "Arms Stockpile",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "emergency_gasoline_reserve",
+   "name": "Emergency Gasoline Reserve",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "mass_irrigation",
+   "name": "Mass Irrigation",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "uranium_enrichment_program",
+   "name": "Uranium Enrichment Program",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "recycling_initiative",
+   "name": "Recycling Initiative",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "green_technologies",
+   "name": "Green Technologies",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "telecommunications_satellite",
+   "name": "Telecommunications Satellite",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "international_trade_center",
+   "name": "International Trade Center",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "clinical_research_center",
+   "name": "Clinical Research Center",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "specialized_police_training_program",
+   "name": "Specialized Police Training Program",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "arable_land_agency",
+   "name": "Arable Land Agency",
+   "category": "resource",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "pirate_economy",
+   "name": "Pirate Economy",
+   "category": "economy",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "advanced_pirate_economy",
+   "name": "Advanced Pirate Economy",
+   "category": "economy",
+   "cost": null,
+   "requires": [
+    "pirate_economy"
+   ],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "military_salvage",
+   "name": "Military Salvage",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "fallout_shelter",
+   "name": "Fallout Shelter",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "propaganda_bureau",
+   "name": "Propaganda Bureau",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "intelligence_agency",
+   "name": "Intelligence Agency",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "missile_launch_pad",
+   "name": "Missile Launch Pad",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "nuclear_research_facility",
+   "name": "Nuclear Research Facility",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "nuclear_launch_facility",
+   "name": "Nuclear Launch Facility",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "iron_dome",
+   "name": "Iron Dome",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "vital_defense_system",
+   "name": "Vital Defense System",
+   "category": "military",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "space_program",
+   "name": "Space Program",
+   "category": "space",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "moon_landing",
+   "name": "Moon Landing",
+   "category": "space",
+   "cost": null,
+   "requires": [
+    "space_program"
+   ],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "mars_landing",
+   "name": "Mars Landing",
+   "category": "space",
+   "cost": null,
+   "requires": [
+    "moon_landing"
+   ],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "spy_satellite",
+   "name": "Spy Satellite",
+   "category": "space",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "guiding_satellite",
+   "name": "Guiding Satellite",
+   "category": "space",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  },
+  {
+   "key": "surveillance_network",
+   "name": "Surveillance Network",
+   "category": "space",
+   "cost": null,
+   "requires": [],
+   "min_cities": null,
+   "verified": false,
+   "notes": "cost and any other requirements not loaded"
+  }
+ ]
+}

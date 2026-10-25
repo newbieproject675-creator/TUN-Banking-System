@@ -23,9 +23,9 @@ from .valuation import value_amounts
 
 log = logging.getLogger("tunbank.disburse")
 
-KINDS = ("RAWS", "WARCHEST_GRANT", "CITY_GRANT", "INFRA_GRANT", "LAND_GRANT")
+KINDS = ("RAWS", "WARCHEST_GRANT", "CITY_GRANT", "INFRA_GRANT", "LAND_GRANT", "PROJECT_GRANT")
 LABEL = {"RAWS": "Raws (operating upkeep)", "WARCHEST_GRANT": "Warchest grant", "CITY_GRANT": "City grant",
-         "INFRA_GRANT": "Infrastructure grant", "LAND_GRANT": "Land grant"}
+         "INFRA_GRANT": "Infrastructure grant", "LAND_GRANT": "Land grant", "PROJECT_GRANT": "Project grant"}
 SOURCES = ("ALLIANCE", "MEMBER_AVAILABLE", "MEMBER_LOCKED")
 SYSTEMIC = ("EMERGENCY LOCK", "paused", "RECONCILIATION REQUIRED", "Could not read the live PnW bank")
 _RUNNING: set = set()

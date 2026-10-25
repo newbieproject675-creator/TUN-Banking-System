@@ -26,6 +26,7 @@ from . import identity
 from . import ledger as L
 from . import money as M
 from . import pnw_rules as PR
+from . import projects as PJ
 from .config import cfg_bool, cfg_get, cfg_int, cfg_set
 from .pnw import PnWRejected, PnWUncertain
 from .ui import Services, actor_label, confirm, has_flag, nation_arg, need, reply, role_ids, thinking
@@ -93,7 +94,10 @@ def register(grant: app_commands.Group, transfer: app_commands.Group, grantset: 
 
     async def calculate(ids, calc_fn, kind):
         """Fetch live data and calculate every recipient. A nation PnW did not return, or that is not in the alliance, is flagged."""
-        details = await svc.pnw.fetch_nations_detail(ids)
+        with svc.db.read() as conn:
+            PR.load_overrides(cfg_get(conn, "pnw_rule_overrides"))                       # the admin's corrections to the built-in rules
+            project_keys = PJ.project_field_keys(PJ.active(conn)) if kind == "PROJECT_GRANT" else ()
+        details = await svc.pnw.fetch_nations_detail(ids, project_keys)
         try:
             roster = await svc.pnw.fetch_alliance_members()          # the proven member list (applicants excluded)
         except (PnWRejected, PnWUncertain):
@@ -193,7 +197,10 @@ def register(grant: app_commands.Group, transfer: app_commands.Group, grantset: 
         if totals:
             card.add("Total to send", fmt.amounts_with_value(totals, val) if val else fmt.amount_lines(totals))
         for c in sendable[:6]:
-            card.add(label_of(c.nation_id), fmt.short_amounts(c.amounts) + (" ⚠️ ESTIMATE" if c.estimate else ""), False)
+            if kind == "PROJECT_GRANT" and c.inputs.get("preview"):
+                card.add(label_of(c.nation_id), c.inputs["preview"][:1000] + ("\n⚠️ ESTIMATE" if c.estimate else ""), False)
+            else:
+                card.add(label_of(c.nation_id), fmt.short_amounts(c.amounts) + (" ⚠️ ESTIMATE" if c.estimate else ""), False)
         if len(sendable) > 6:
             card.add("…", f"and {len(sendable) - 6} more (see the attached calculation)")
         if flagged:
@@ -210,7 +217,7 @@ def register(grant: app_commands.Group, transfer: app_commands.Group, grantset: 
             return await reply(interaction, card=card)
         if errors:
             card.title = f"{icons.status('bad')} {DB.LABEL[kind]} · blocked"
-            card.description = "Nothing was sent. The funding source cannot cover this as it stands."
+            card.description = "Nothing was sent. Something has to be fixed first (see Problems below)."
             card.add("Problems", "\n".join(errors[:8]) + (f"\n…and {len(errors) - 8} more" if len(errors) > 8 else ""))
             return await reply(interaction, card=card)
         with svc.db.read() as conn:
@@ -351,18 +358,53 @@ def register(grant: app_commands.Group, transfer: app_commands.Group, grantset: 
                    default_note=f"Warchest x{PR.clean(r)}",
                    params={"ratio": PR.clean(r), "per_city": per_city, "only_missing": only_missing})
 
-    @grant.command(name="city", description="ECON: give the money to buy the next city (or several)")
-    @app_commands.describe(nation="Recipient: id, name, link or @user", number_of_cities="How many cities (1-10)", source="Whose funds pay for it",
+    @grant.command(name="city", description="ECON: give the money to buy new cities, or to buy up to a city number")
+    @app_commands.describe(nation="Recipient: id, name, link or @user", source="Whose funds pay for it",
+                           number_of_cities="Buy this many NEW cities (default 1)",
+                           up_to="Buy up to this city number: up_to 25 for a 24-city nation is just city #25",
                            source_member="Member-funded: whose balance (empty = the recipient's own)", lock_id="Locked-funds source: the lock",
                            note="Note shown in PnW")
     @app_commands.choices(source=SOURCE_CHOICES)
-    async def city(interaction: discord.Interaction, nation: str, number_of_cities: int, source: app_commands.Choice[str],
+    async def city(interaction: discord.Interaction, nation: str, source: app_commands.Choice[str], number_of_cities: int = 0, up_to: int = 0,
                    source_member: str = "", lock_id: int = 0, note: str = ""):
         if "," in nation:
             return await reply(interaction, "Give ONE nation for a city grant.")
+        if number_of_cities and up_to:
+            return await reply(interaction, "Use EITHER `number_of_cities` (that many new cities) OR `up_to` (until the nation has that many), not both.")
+        if up_to < 0 or number_of_cities < 0:
+            return await reply(interaction, "Those numbers cannot be negative.")
+        target = up_to or None
+        count = None if up_to else (number_of_cities or 1)
         await flow(interaction, kind="CITY_GRANT", nations=nation, source_choice=source, source_member=source_member, lock_id=lock_id, note=note,
-                   calc_fn=lambda n: PR.compute_city(n, number_of_cities), default_note=f"City grant x{number_of_cities}",
-                   params={"number_of_cities": number_of_cities})
+                   calc_fn=lambda n: PR.compute_city(n, count, target),
+                   default_note=(f"City grant up to #{up_to}" if up_to else f"City grant x{count}"),
+                   params={"number_of_cities": count, "up_to": target})
+
+    @grant.command(name="project", description="ECON: give the money and resources a nation needs to buy a project")
+    @app_commands.describe(nations="Nation names or IDs, comma separated", project="The project (start typing its name)",
+                           source="Whose funds pay for it", only_missing="Deduct each nation's verified stockpile (send only what is missing)",
+                           source_member="Member-funded: whose balance (empty = each recipient's own)", lock_id="Locked-funds source: the lock",
+                           note="Note shown in PnW")
+    @app_commands.choices(source=SOURCE_CHOICES)
+    async def project(interaction: discord.Interaction, nations: str, project: str, source: app_commands.Choice[str], only_missing: bool = False,
+                      source_member: str = "", lock_id: int = 0, note: str = ""):
+        with svc.db.read() as conn:
+            cat = PJ.active(conn)
+        entry = PJ.find(cat, project)
+        if entry is None:
+            return await reply(interaction, f"I don't know a project called '{project}' in the catalogue ({len(cat.projects)} projects). "
+                                            "Start typing the name and pick it from the list. If a project is missing, add it with `/grantset projectimport`.")
+        await flow(interaction, kind="PROJECT_GRANT", nations=nations, source_choice=source, source_member=source_member, lock_id=lock_id, note=note,
+                   calc_fn=lambda n: PJ.compute_project(n, entry, cat, only_missing=only_missing), default_note=f"Project: {entry['name']}",
+                   params={"project": entry["key"], "project_name": entry["name"], "only_missing": only_missing, "catalogue_sha256": cat.sha[:16]})
+
+    @project.autocomplete("project")
+    async def project_autocomplete(interaction: discord.Interaction, current: str):
+        with svc.db.read() as conn:
+            cat = PJ.active(conn)
+        cur = (current or "").lower()
+        return [app_commands.Choice(name=e["name"][:100], value=e["key"]) for e in cat.projects.values()
+                if not cur or cur in e["name"].lower() or cur in e["key"]][:25]
 
     @grant.command(name="infrastructure", description="ECON: give the money to raise every city's infrastructure to a target")
     @app_commands.describe(nations="Nation names or IDs, comma separated", source="Whose funds pay for it",
@@ -460,10 +502,103 @@ def register(grant: app_commands.Group, transfer: app_commands.Group, grantset: 
         if not await need(svc, interaction, "MINISTER"):
             return
         await thinking(interaction)
+        with svc.db.read() as conn:
+            PR.load_overrides(cfg_get(conn, "pnw_rule_overrides"))
         await interaction.followup.send(
             content="These are the rules the bot calculates with. They are **not verified** against the live game: compare previews with the game / "
                     "Locutus before switching sending on, and tell me if anything differs.", ephemeral=True,
             file=discord.File(io.BytesIO(PR.sheet().encode()), filename="pnw-rules.txt"))
+
+    @grantset.command(name="projects", description="ECON: the project catalogue in force, and a CSV of it to edit and import")
+    async def projects_status(interaction: discord.Interaction):
+        if not await need(svc, interaction, "AUDITOR"):
+            return
+        await thinking(interaction)
+        with svc.db.read() as conn:
+            cat = PJ.active(conn)
+        missing = [e["name"] for e in cat.projects.values() if not e.get("cost")]
+        c = A.Card("📚 Project catalogue", "Used by `/grant project`. A project with no verified cost cannot be granted.", A.BLUE)
+        c.add("In force", f"{cat.source}" + (f" · version #{cat.version_id} by <@{cat.imported_by}>" if cat.version_id else " (built in)"), False)
+        c.add("Fingerprint", f"`{cat.sha[:16]}`", True)
+        c.add("Projects", f"{len(cat.projects)} listed · {cat.costed()} with a cost · {cat.verified()} verified", True)
+        c.add("Domestic-policy discounts", (f"{len(cat.policy_rules)} rule(s) · " + ("verified" if cat.policy_verified else "NOT verified")), True)
+        if missing:
+            c.add("Cost not loaded", ", ".join(missing[:25]) + (f" …and {len(missing) - 25} more" if len(missing) > 25 else ""))
+        c.add("Is this list complete?", "It cannot be confirmed from here. `python scripts/check_pnw_schema.py` compares it with the project fields PnW itself "
+                                        "reports, and lists any that are missing.")
+        c.add("To update", "Edit the attached CSV (cost columns in $ and resource units, `requires` = project keys separated by |) and import it with "
+                           "`/grantset projectimport`. Each import is kept as a new version.")
+        await interaction.followup.send(embed=A.to_embed(c), ephemeral=True,
+                                        file=discord.File(io.BytesIO(PJ.export_csv(cat).encode()), filename="project-catalogue.csv"))
+
+    @grantset.command(name="projectimport", description="Admin: import the project costs/requirements from a CSV or JSON file")
+    @app_commands.describe(file="project-catalogue.csv (or .json). Rows are matched by `key`; projects not in the file are left as they are")
+    async def projectimport(interaction: discord.Interaction, file: discord.Attachment):
+        if not await need(svc, interaction, "ADMIN"):
+            return
+        await thinking(interaction)
+        if file.size > PJ.MAX_IMPORT_BYTES:
+            return await reply(interaction, "That file is too large to be a project catalogue.")
+        text = (await file.read()).decode("utf-8-sig", errors="replace")
+        try:
+            def look():
+                with svc.db.read() as conn:
+                    return PJ.prepare(PJ.active(conn), text, file.filename)
+            doc, changed = await asyncio.to_thread(look)
+        except L.LedgerError as exc:
+            return await reply(interaction, str(exc))
+        c = A.Card("Confirm: import the project catalogue", "Costs you import are treated as VERIFIED by you: they must match the game.", A.ORANGE)
+        c.add("File", f"{file.filename}", True)
+        c.add("Projects after import", str(len(doc["projects"])), True)
+        c.add("Costs added or changed", (", ".join(changed[:25]) + (f" …and {len(changed) - 25} more" if len(changed) > 25 else "")) if changed else "none")
+        c.add("Domestic-policy discounts", f"{len(doc['policy_discounts']['rules'])} rule(s), " + ("marked verified" if doc["policy_discounts"]["verified"] else "NOT marked verified"))
+        c.add("Kept", "The previous version stays in the history; nothing is deleted.")
+        if not await confirm(svc, interaction, c):
+            return await interaction.followup.send("Cancelled. Nothing was imported.", ephemeral=True)
+
+        def do():
+            with svc.db.tx() as conn:
+                return PJ.import_catalogue(conn, text=text, filename=file.filename, actor=uid(interaction))
+        try:
+            res = await asyncio.to_thread(do)
+        except L.LedgerError as exc:
+            return await interaction.followup.send(str(exc), ephemeral=True)
+        await interaction.followup.send(f"Imported as catalogue version **#{res['version_id']}** ({res['projects']} projects, {res['costed']} with a cost, "
+                                        f"{len(res['costs_changed'])} changed). Fingerprint `{res['sha'][:16]}`.", ephemeral=True)
+
+    @grantset.command(name="rule", description="Admin: correct one number of the built-in game rules (or reset it)")
+    @app_commands.describe(key="Which rule (start typing)", value="The new number, or `reset` to go back to the built-in value")
+    async def rule_cmd(interaction: discord.Interaction, key: str, value: str):
+        if not await need(svc, interaction, "ADMIN"):
+            return
+        if key not in PR.DEFAULT_RULES:
+            return await reply(interaction, "I don't know that rule. Start typing and pick one from the list (`/grantset rules` lists them all).")
+        with svc.db.read() as conn:
+            current = json.loads(cfg_get(conn, "pnw_rule_overrides") or "{}")
+        before = current.get(key, str(PR.DEFAULT_RULES[key]))
+        if value.strip().lower() == "reset":
+            current.pop(key, None)
+        else:
+            try:
+                new = Decimal(value.strip().replace(",", ""))
+            except InvalidOperation:
+                return await reply(interaction, "Give a number, for example `0.05` or `1200`, or `reset`.")
+            if new < 0 or new > Decimal("1e12"):
+                return await reply(interaction, "That number is out of range.")
+            current[key] = format(new.normalize(), "f")
+
+        def do():
+            with svc.db.tx() as conn:
+                cfg_set(conn, "pnw_rule_overrides", json.dumps(current, sort_keys=True), uid(interaction))
+                L.audit(conn, uid(interaction), "RULE_CHANGED", key, {"before": str(before), "after": current.get(key, "built-in")})
+        await asyncio.to_thread(do)
+        await reply(interaction, f"**{key}**: {before} → **{current.get(key, str(PR.DEFAULT_RULES[key]) + ' (built-in)')}**. "
+                                 "It applies from the next calculation. `/grantset rules` shows every rule in force.")
+
+    @rule_cmd.autocomplete("key")
+    async def rule_autocomplete(interaction: discord.Interaction, current: str):
+        cur = (current or "").lower()
+        return [app_commands.Choice(name=k[:100], value=k) for k in sorted(PR.DEFAULT_RULES) if not cur or cur in k][:25]
 
     @grantset.command(name="live", description="Admin: allow a kind of transfer to actually SEND (off = preview only)")
     @app_commands.describe(kind="Which transfer", enabled="on = may send, off = preview only")
