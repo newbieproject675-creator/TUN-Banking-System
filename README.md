@@ -25,14 +25,24 @@ either a real PnW bank record or a documented opening balance.
 | 15 | [docs/15_RECONCILIATION.md](docs/15_RECONCILIATION.md) | Reconciliation statuses: resource level, net position, liquidity |
 | 14 | [docs/14_LOANS.md](docs/14_LOANS.md) | Loans: record, repay (#loan), deduct, write off, overdue alerts |
 | 13 | [docs/13_DEPOSIT_RESET_AND_RESTORE.md](docs/13_DEPOSIT_RESET_AND_RESTORE.md) | Reset member balances and restore them from the Locutus spreadsheet |
+| 18 | [docs/18_MOVE_TO_ANOTHER_RAILWAY.md](docs/18_MOVE_TO_ANOTHER_RAILWAY.md) | What a backup contains, and moving to another Railway account with verification |
+| 19 | [docs/19_ICONS.md](docs/19_ICONS.md) | Using the real PnW resource icons |
+| 20 | [docs/20_MULTI_ALLIANCE_PLAN.md](docs/20_MULTI_ALLIANCE_PLAN.md) | Serving several alliances: assessment and plan (NOT built yet) |
+| 21 | [docs/21_THIS_UPDATE.md](docs/21_THIS_UPDATE.md) | Funded credits, external withdrawals, member DMs, reconciliation gate, settings tools |
+| 22 | [docs/22_TRANSFERS_GRANTS_AND_OFFSHORE_WIPE.md](docs/22_TRANSFERS_GRANTS_AND_OFFSHORE_WIPE.md) | `/transfer raws`, `/grant warchest/city/infrastructure/land/project`, the project catalogue, `/offshore wipe` |
+| 23 | [docs/23_LIVE_TEST_CHECKLIST.md](docs/23_LIVE_TEST_CHECKLIST.md) | An ordered checklist for the first live test |
 
 ## Where things live (important)
 * **Code** → GitHub (this folder). Updating code never touches your data.
 * **Secrets** → the `.env` file on your PC / the *Variables* tab on Railway. `.env` is in `.gitignore`, so it is never uploaded.
 * **Database** → `data/tunbank.db` on your PC / the Railway **Volume** in production. `data/` is in `.gitignore`.
 
-## Quick check that everything is in place
+## Checks you can run (none of them touches your data or contacts Discord/PnW unless stated)
 ```
+python scripts/check_startup.py                  # builds the real bot offline and validates every command and the help screens
+python scripts/rehearse_upgrade.py backup.db     # tries an update on a COPY of your database
+python scripts/verify_database.py backup.db      # health + fingerprint of a database file (add --compare other.db, --credentials)
+python scripts/check_pnw_schema.py               # asks the LIVE PnW API whether every field the calculations need exists
 python scripts/check_setup.py
 python -m unittest discover -s tests
 ```

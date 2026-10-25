@@ -19,6 +19,7 @@ from tunbank import disburse as DB  # noqa: E402
 from tunbank import ledger as L  # noqa: E402
 from tunbank import money as M  # noqa: E402
 from tunbank import pnw_rules as PR  # noqa: E402
+from tunbank import projects as PJ  # noqa: E402
 from tunbank.config import cfg_set  # noqa: E402
 
 Choice = TC.discord.app_commands.Choice
@@ -36,10 +37,9 @@ def nation(nid, n_cities=12, *, alliance=ALLIANCE, stock="default", cities="auto
         stock = {r: 0 for r in RES}
     if cities == "auto":
         cities = [city(cid=i + 1) for i in range(n_cities)]
-    d = {"id": nid, "name": f"N{nid}", "alliance_id": alliance, "num_cities": n_cities, "population": 100000, "policy": None,
+    d = {"id": nid, "name": f"N{nid}", "alliance_id": alliance, "num_cities": n_cities, "population": 100000, "policy": "OPEN_MARKETS",
          "military": {u: 0 for u in PR.MILITARY_CASH_UPKEEP}, "stock": stock,
-         "projects": {p: False for p in ("urban_planning", "advanced_urban_planning", "metropolitan_planning",
-                                         "center_for_civil_engineering", "advanced_engineering_corps")}, "cities": cities}
+         "projects": {p: False for p in PR.ALL_PROJECTS}, "project_timer": 0, "cities": cities}
     d.update(kw)
     return d
 
@@ -94,12 +94,12 @@ class TestRawsRules(unittest.TestCase):
         return n
 
     def test_golden_two_days_from_the_nations_actual_buildings(self):
-        # per day: 2 coal plants power 1000 infra = 12 coal; steel mill 3 coal + 3 iron; food 100000/1000 + 10000/500 = 120;
-        # cash 2*1200 + 4000 + 300 + 10000*1.25 = 19,200
+        # per day: 2 coal plants power 1000 infra = 12 coal; steel mill 3 coal + 3 iron; food use 100000/1000 + 10000/500 = 120 minus
+        # the farm's own 500/500*12 = 12 -> 108 needed; cash 2*1200 + 4000 + 300 + 10000*1.25 = 19,200 (gross)
         c = PR.compute_raws(self.base(), 2)
         self.assertTrue(c.sendable, c.review)
         got = {r: M.units_to_float(a) for r, a in c.requirement.items()}
-        self.assertEqual(got, {"coal": 30, "iron": 6, "food": 240, "money": 38400})
+        self.assertEqual(got, {"coal": 30, "iron": 6, "food": 216, "money": 38400})
         self.assertEqual(c.amounts, c.requirement)
 
     def test_requirements_depend_on_the_nation_not_a_fixed_list(self):
@@ -190,7 +190,8 @@ class TestPurchaseRules(unittest.TestCase):
     def test_city_input_validation(self):
         self.assertFalse(PR.compute_city(nation(1, 0), 1).sendable)
         self.assertFalse(PR.compute_city(nation(1, 12), 0).sendable)
-        self.assertFalse(PR.compute_city(nation(1, 12), 11).sendable)
+        self.assertFalse(PR.compute_city(nation(1, 12), 51).sendable)
+        self.assertTrue(PR.compute_city(nation(1, 12), 25).sendable)
 
     def test_infrastructure_priced_from_each_cities_own_level(self):
         n = nation(1, 3, cities=[city(1000, cid=1), city(1500, cid=2), city(2000, cid=3)])
@@ -238,7 +239,7 @@ class Base(TC.Cmd):
         self.nations = {1: nation(1, 12), 2: nation(2, 12), 3: nation(3, 6)}
         self.detail_calls = 0
 
-        async def fetch(ids):
+        async def fetch(ids, project_keys=()):
             self.detail_calls += 1
             return {i: json.loads(json.dumps(self.nations[i])) for i in ids if i in self.nations}
         self.pnw.fetch_nations_detail = fetch
@@ -443,7 +444,7 @@ class TestFailureHandling(Base):
     def test_pnw_unreadable_means_nothing_is_calculated_or_sent(self):
         from tunbank.pnw import PnWRejected
 
-        async def boom(ids):
+        async def boom(ids, project_keys=()):
             raise PnWRejected("Cannot query field \"population\" on type \"Nation\"")
         self.pnw.fetch_nations_detail = boom
         i = self.warchest(self.admin, "1")
@@ -482,7 +483,7 @@ class TestDuplicateProtection(Base):
     def test_data_that_changes_between_preview_and_confirmation_sends_nothing(self):
         state = {"n": 0}
 
-        async def fetch(ids):
+        async def fetch(ids, project_keys=()):
             state["n"] += 1
             n = 12 if state["n"] == 1 else 13                                                           # the nation bought a city meanwhile
             return {i: nation(i, n) for i in ids}
@@ -598,7 +599,7 @@ class TestOtherCommands(Base):
         self.assertEqual(self.pnw.withdraw_calls, 1)
         it = self.items()[0]
         self.assertEqual(it["kind"], "RAWS")
-        self.assertEqual(json.loads(it["amounts_json"]), {"coal": 3000, "iron": 600, "food": 24000, "money": 3840000})
+        self.assertEqual(json.loads(it["amounts_json"]), {"coal": 3000, "iron": 600, "food": 21600, "money": 3840000})
         self.assertEqual(self.batches()[0]["kind"], "RAWS")
 
     def test_raws_no_cash_only_missing_and_the_daily_cash_rule(self):
@@ -620,12 +621,12 @@ class TestOtherCommands(Base):
         self.assertEqual(self.pnw.withdraw_calls, 0)
 
     def test_city_grant_with_cap_and_single_nation_rule(self):
-        self.call(self.grant, "city", self.admin, "1", 1, ALLI)
+        self.call(self.grant, "city", self.admin, "1", ALLI, 1)
         self.assertEqual(json.loads(self.items()[0]["amounts_json"]), {"money": 6842500000})
         self.assertEqual(self.batches()[0]["kind"], "CITY_GRANT")
-        self.assertIn("ONE nation", self.call(self.grant, "city", self.admin, "1, 2", 1, ALLI).text())
+        self.assertIn("ONE nation", self.call(self.grant, "city", self.admin, "1, 2", ALLI, 1).text())
         self.cfg("grant_city_max_usd", "1000000")
-        i = self.call(self.grant, "city", self.admin, "2", 1, ALLI, note="capped")
+        i = self.call(self.grant, "city", self.admin, "2", ALLI, 1, note="capped")
         self.assertEqual(len(self.batches()), 1)                                                           # over the cap: flagged, nothing to send
         self.assertEqual(self.pnw.withdraw_calls, 1)
         self.assertIn("cap", i.text())
@@ -731,6 +732,180 @@ class TestPnWTextNumbers(unittest.TestCase):
         self.assertEqual((d["projects"]["urban_planning"], d["projects"]["advanced_urban_planning"]), (True, False))
         c = d["cities"][0]
         self.assertEqual((c["id"], c["infrastructure"], c["land"], c["buildings"]["farm"]), (9, 1000.0, 500.5, 1))
+
+
+# ====================================================================================== city up_to and projects
+class TestCityUpTo(unittest.TestCase):
+    def test_up_to_buys_only_the_cities_between_what_the_nation_has_and_the_target(self):
+        one = int(PR.city_price(24))
+        c = PR.compute_city(nation(1, 24), up_to=25)                                         # the nation has 24: just the 25th city
+        self.assertEqual(M.units_to_float(c.amounts["money"]), one)
+        five = PR.compute_city(nation(1, 20), up_to=25)                                      # cities 21 to 25
+        self.assertEqual(M.units_to_float(five.amounts["money"]), sum(int(PR.city_price(n)) for n in range(20, 25)))
+        self.assertFalse(PR.compute_city(nation(1, 25), up_to=25).sendable)                  # already there: nothing to buy
+        self.assertFalse(PR.compute_city(nation(1, 30), up_to=25).sendable)
+
+
+CSV_COSTS = ("key,name,category,money,food,coal,oil,uranium,iron,bauxite,lead,gasoline,munitions,steel,aluminum,requires,min_cities,notes\n"
+             "iron_works,Iron Works,resource,5000000,,,,,,,,,,1000,1000,,,\n"
+             "advanced_urban_planning,Advanced Urban Planning,economy,100000000,,,,,,,,,,2000,3000,urban_planning,10,\n")
+POLICY_JSON = ('{"policy_discounts": {"verified": true, "rules": [{"policy": "Technological Advancement", "projects": ["iron_works"], "discount": 0.05, "applies_to": "both"},'
+               '{"policy": "TECHNOLOGICAL_ADVANCEMENT", "projects": ["*"], "discount": 0.02, "applies_to": "cash"}]}}')
+
+
+class TestProjects(Base):
+    def catalogue(self, csv_text=CSV_COSTS, policy=None):
+        with self.db.tx() as c:
+            PJ.import_catalogue(c, text=csv_text, filename="t.csv", actor="9")
+            if policy:
+                PJ.import_catalogue(c, text=policy, filename="p.json", actor="9")
+        with self.db.read() as c:
+            return PJ.active(c)
+
+    def calc(self, cat, key, **nation_kw):
+        return PJ.compute_project(nation(1, 12, **nation_kw), cat.projects[key], cat)
+
+    def test_seed_has_no_costs_so_nothing_can_be_granted_until_costs_are_imported(self):
+        with self.db.read() as c:
+            cat = PJ.active(c)
+        self.assertGreater(len(cat.projects), 30)
+        r = PJ.compute_project(nation(1, 12), cat.projects["iron_works"], cat)
+        self.assertFalse(r.sendable)
+        self.assertIn("not loaded", r.review[0])
+
+    def test_cost_eligibility_and_prerequisites(self):
+        cat = self.catalogue()
+        ok = self.calc(cat, "iron_works")
+        self.assertTrue(ok.sendable, ok.review)
+        self.assertEqual({r: M.units_to_float(a) for r, a in ok.amounts.items()}, {"money": 5000000, "steel": 1000, "aluminum": 1000})
+        owned = nation(1, 12)
+        owned["projects"]["iron_works"] = True
+        self.assertIn("already owns", PJ.compute_project(owned, cat.projects["iron_works"], cat).review[0])
+        unknown = nation(1, 12)
+        unknown["projects"]["iron_works"] = None
+        self.assertIn("did not report whether", PJ.compute_project(unknown, cat.projects["iron_works"], cat).review[0])
+        self.assertTrue(any("requires Urban Planning" in x for x in self.calc(cat, "advanced_urban_planning").review))       # prerequisite missing
+        n = nation(1, 12)
+        n["projects"]["urban_planning"] = True
+        self.assertTrue(PJ.compute_project(n, cat.projects["advanced_urban_planning"], cat).sendable)
+        small = nation(1, 5)
+        small["projects"]["urban_planning"] = True
+        self.assertTrue(any("at least 10 cities" in x for x in PJ.compute_project(small, cat.projects["advanced_urban_planning"], cat).review))
+        busy = nation(1, 12, project_timer=7)
+        self.assertTrue(any("timer" in x for x in PJ.compute_project(busy, cat.projects["iron_works"], cat).review))
+
+    def test_domestic_policy_discount_is_exact_never_stacked_and_only_for_listed_projects(self):
+        cat = self.catalogue(policy=POLICY_JSON)
+        self.assertTrue(cat.policy_verified)
+        hit = self.calc(cat, "iron_works", policy="TECHNOLOGICAL_ADVANCEMENT")
+        self.assertEqual({r: M.units_to_float(a) for r, a in hit.amounts.items()}, {"money": 4750000, "steel": 950, "aluminum": 950})   # the 5% rule only
+        other = self.calc(cat, "advanced_urban_planning", policy="TECHNOLOGICAL_ADVANCEMENT")
+        n = nation(1, 12, policy="TECHNOLOGICAL_ADVANCEMENT")
+        n["projects"]["urban_planning"] = True
+        got = PJ.compute_project(n, cat.projects["advanced_urban_planning"], cat)
+        self.assertEqual(M.units_to_float(got.amounts["money"]), 98000000)                          # only the cash rule (2%) applies to it; resources untouched
+        self.assertEqual(M.units_to_float(got.amounts["steel"]), 2000)
+        none = self.calc(cat, "iron_works", policy="OPEN_MARKETS")
+        self.assertEqual(M.units_to_float(none.amounts["money"]), 5000000)                          # a different policy: no discount
+        unknown = self.calc(cat, "iron_works", policy=None)
+        self.assertFalse(unknown.sendable)                                                          # policy unreadable while a discount may apply: flagged
+        self.assertIn("domestic policy could not be read", unknown.review[0])
+
+    def test_an_unverified_policy_table_is_flagged_not_silently_ignored(self):
+        cat = self.catalogue()
+        r = self.calc(cat, "iron_works")
+        self.assertTrue(r.estimate)
+        self.assertTrue(any("NOT been verified" in a for a in r.assumptions))
+
+    def test_end_to_end_only_eligible_nations_are_paid_and_the_batch_records_the_calculation(self):
+        self.catalogue(policy=POLICY_JSON)
+        self.nations[1] = nation(1, 12, policy="TECHNOLOGICAL_ADVANCEMENT")
+        self.nations[2] = nation(2, 12)
+        self.nations[2]["projects"]["iron_works"] = True                                            # already owns it: must not be paid
+        i = self.call(self.grant, "project", self.admin, "1, 2", "Iron Works", ALLI)
+        self.assertEqual(self.pnw.withdraw_calls, 1)
+        st = {it["nation_id"]: it for it in self.items()}
+        self.assertEqual((st[1]["status"], st[2]["status"], st[1]["kind"]), ("COMPLETED", "REVIEW", "PROJECT_GRANT"))
+        self.assertEqual(json.loads(st[1]["amounts_json"]), {"money": 475000000, "steel": 95000, "aluminum": 95000})
+        self.assertIn("already owns", st[2]["message"])
+        calc = json.loads(st[1]["calculation_json"])
+        self.assertEqual(calc["inputs"]["project"], "iron_works")
+        self.assertEqual(self.batches()[0]["status"], "PARTIAL")                                    # one nation left out: never "completed"
+        self.assertIn("Final cost", i.text())
+
+    def test_unknown_project_and_nothing_sent_when_everyone_is_ineligible(self):
+        self.catalogue()
+        self.assertIn("don't know a project", self.call(self.grant, "project", self.admin, "1", "Flying Pigs", ALLI).text())
+        self.nations[1]["projects"]["iron_works"] = True
+        self.call(self.grant, "project", self.admin, "1", "iron_works", ALLI)
+        self.assertEqual((self.pnw.withdraw_calls, self.batches()), (0, []))
+
+    def test_catalogue_import_is_validated_versioned_and_immutable(self):
+        import sqlite3
+        with self.db.tx() as c:
+            with self.assertRaises(PJ.CatalogueError):
+                PJ.import_catalogue(c, text="key,money\niron_works,-5\n", filename="bad.csv", actor="9")        # negative cost refused
+        with self.db.tx() as c:
+            with self.assertRaises(PJ.CatalogueError):
+                PJ.import_catalogue(c, text="not,a,catalogue\n1,2,3\n", filename="bad.csv", actor="9")
+        self.catalogue()
+        with self.db.read() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM project_catalogue_versions").fetchone()[0], 1)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM audit_log WHERE action='PROJECT_CATALOGUE_IMPORTED'").fetchone()[0], 1)
+        with self.db.tx() as c:
+            for sql in ("UPDATE project_catalogue_versions SET json_text='{}'", "DELETE FROM project_catalogue_versions"):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    c.execute(sql)
+
+    def test_game_rules_can_be_corrected_from_discord_and_the_correction_applies(self):
+        PR.load_overrides("{}")
+        self.addCleanup(lambda: PR.load_overrides("{}"))
+        base = PR.compute_city(nation(1, 12), 1).amounts["money"]
+        self.call(self.grantset, "rule", self.admin, "city.constant", "175000")                      # +100,000 on the constant term
+        self.warchest(self.admin, "1")                                                               # any command reloads the rules
+        PR.load_overrides(self.rows("SELECT value FROM bank_config WHERE key='pnw_rule_overrides'")[0]["value"])
+        self.assertEqual(PR.compute_city(nation(1, 12), 1).amounts["money"], base + 100000 * M.SCALE)
+        self.call(self.grantset, "rule", self.admin, "city.constant", "reset")
+        PR.load_overrides(self.rows("SELECT value FROM bank_config WHERE key='pnw_rule_overrides'")[0]["value"])
+        self.assertEqual(PR.compute_city(nation(1, 12), 1).amounts["money"], base)
+        self.assertIn("don't know that rule", self.call(self.grantset, "rule", self.admin, "nonsense", "1").text())
+        self.assertIn("Admin", self.call(self.grantset, "rule", self.alice, "city.constant", "1").text())
+
+
+class TestMigration017(unittest.TestCase):
+    def test_existing_batches_and_items_survive_the_table_rebuild_unchanged(self):
+        import shutil
+        import tempfile
+
+        from tunbank import db as DBMOD
+        d = Path(tempfile.mkdtemp())
+        old = d / "m"
+        old.mkdir()
+        for f in DBMOD.MIGRATIONS_DIR.glob("0*.sql"):
+            if int(f.name[:3]) <= 16:
+                shutil.copy(f, old)
+        real = DBMOD.MIGRATIONS_DIR
+        DBMOD.MIGRATIONS_DIR = old
+        try:
+            db = DBMOD.Database(d / "t.db")
+            db.migrate()
+            with db.tx() as c:
+                c.execute("INSERT INTO disbursement_batches(created_at,kind,actor,funding_source,source_description,note,parameters_json,totals_json,"
+                          "content_sha256,request_key,status) VALUES('2026-10-01T00:00:00Z','WARCHEST_GRANT','9','ALLIANCE','x','n','{}','{}','sha','rk','COMPLETED')")
+                c.execute("INSERT INTO disbursement_items(batch_id,seq,nation_id,kind,amounts_json,calculation_json,status) "
+                          "VALUES(1,1,5,'WARCHEST_GRANT','{\"food\": 100}','{}','COMPLETED')")
+            before = {t: [tuple(r) for r in db.conn.execute(f"SELECT * FROM {t}")] for t in ("disbursement_batches", "disbursement_items")}
+        finally:
+            DBMOD.MIGRATIONS_DIR = real
+        self.assertEqual(db.migrate(backup_dir=d / "bk"), ["017_project_grants.sql"])
+        after = {t: [tuple(r) for r in db.conn.execute(f"SELECT * FROM {t}")] for t in ("disbursement_batches", "disbursement_items")}
+        self.assertEqual(before, after)
+        with db.tx() as c:                                                                           # the wider kind list is live, the guards still hold
+            c.execute("INSERT INTO disbursement_batches(created_at,kind,actor,funding_source,source_description,note,parameters_json,totals_json,"
+                      "content_sha256,request_key) VALUES('t','PROJECT_GRANT','9','ALLIANCE','x','n','{}','{}','s2','rk2')")
+            import sqlite3
+            with self.assertRaises(sqlite3.DatabaseError):
+                c.execute("DELETE FROM disbursement_batches")
 
 
 if __name__ == "__main__":

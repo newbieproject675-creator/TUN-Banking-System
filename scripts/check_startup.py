@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 NEEDED = {"bank": {"credit", "adjust", "review", "withdrawself", "deposit"},
           "bankset": {"config", "gate", "resetconfig", "iconpack", "backup", "icons"},
-          "grant": {"send", "warchest", "city", "infrastructure", "land"},
+          "grant": {"send", "warchest", "city", "infrastructure", "land", "project"},
           "transfer": {"raws"},
-          "grantset": {"show", "warchest", "infra", "land", "citycap", "dailycash", "rules", "live", "batch", "resume"},
+          "grantset": {"show", "warchest", "infra", "land", "citycap", "dailycash", "rules", "live", "batch", "resume", "projects", "projectimport", "rule"},
           "offshore": {"wipe", "release", "assign", "reassign", "adjustownership"}}
 
 

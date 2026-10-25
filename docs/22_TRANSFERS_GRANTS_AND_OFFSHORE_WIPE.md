@@ -14,6 +14,38 @@ builder can no longer produce an invalid embed at all. The test harness now enfo
 * **The wrong message.** When every nation is left out for review the card now says "nothing to send" (and that the funding source was not the problem) instead of blaming the funding source.
 * **`/help` buttons** crashed once there were more than 8 categories (see guide 22's changelog above): rows are now computed.
 
+## 1c. Calculations reworked, `/grant city up_to`, and `/grant project`
+**Raws now work like Locutus: net of the nation's own production.** Need = what the nation uses minus what its own mines, farms and refineries
+make (with the project bonuses: Iron Works, Bauxiteworks, Arms Stockpile, Emergency Gasoline Reserve, Uranium Enrichment, Mass Irrigation),
+per resource, times the days, rounded up. A resource the nation makes enough of needs nothing. The preview shows, per resource, *uses / produces / needs*.
+Cash is the gross building + military upkeep (tax income cannot be rebuilt from the API); use `no_cash`, or `only_missing` to net the cash it holds.
+City / infrastructure / land discounts now cover the projects **and** the domestic policy where one applies; each preview lists the discounts it applied.
+
+**Every number is a rule you can correct without a new deployment.** `/grantset rules` sends all of them (the ones you changed are marked `*`);
+`/grantset rule key value` changes one (Admin, audited, `reset` undoes it). If a preview differs from Locutus or the game, find the rule, correct it, run the preview again.
+The bot asks PnW for the project and building fields it needs; if PnW says one does not exist the bot continues without it (it is treated as "unknown" and the
+result is marked ESTIMATE), so one wrong field name no longer stops everything.
+
+**`/grant city`** now takes `number_of_cities` (that many NEW cities, default 1) **or** `up_to` (buy until the nation has that many): for a 24-city nation
+`up_to:25` is just city #25; for a 20-city nation it is cities 21 to 25. Not both. (The argument order changed: `source` now comes before the optional numbers.)
+
+**`/grant project nations project source [only_missing] …`** gives the money and resources a nation needs to buy a project.
+* **The catalogue is data, not code.** The built-in one lists **39 projects with their game identifiers and only the prerequisites I am certain of, and NO COSTS**,
+  because I could not verify costs offline and will not guess ones that send real resources. Every project therefore says "cost not loaded" until you import the table.
+* **Load it:** `/grantset projects` shows what is loaded and attaches the catalogue as a CSV. Fill in the costs from the game (cash in $, resources in units; `requires`
+  = project keys separated by `|`; `min_cities`), then `/grantset projectimport` (Admin). It is validated, shown to you for confirmation, stored as a new immutable
+  version (who, when, a fingerprint) and the old versions are kept. Imported costs count as **verified by you**. JSON is accepted too (it can also carry
+  the domestic-policy discount table). Updating when the game changes is the same steps.
+* **Domestic-policy discounts** are a table in the catalogue: policy, which projects (or `*`), the discount, and whether it applies to cash, resources or both.
+  Matching is exact; a nation has ONE policy so nothing stacks (if two rules match, the larger wins); cash is rounded up to the dollar and each resource up to a whole unit.
+  The table starts empty and "unverified", so every preview says "ESTIMATE: the discount table has not been verified" until you import a table marked verified.
+  If a discount could apply to the project but the nation's policy could not be read, the nation is flagged for review, never priced at the standard cost.
+* **Eligibility** (anything failing = nothing is sent for that nation): already owns it, PnW did not say whether it owns it, a prerequisite is missing or unknown, too few cities,
+  the project timer is running. The cooldown and the number of slots may not be readable from PnW; the preview then says "NOT VERIFIED: check in game".
+* **Preview** shows, per nation: the project, standard cost, domestic policy and discount, final cost, the nation's current stockpile of the resources involved, what will be sent,
+  the funding source, and every issue or uncertainty.
+* **Completeness cannot be proven from here.** `python scripts/check_pnw_schema.py` compares the catalogue with the project fields PnW itself reports and lists any it does not know.
+
 ## 2. The new commands
 All need the **grant level** (setting "Who may give grants", default Minister). Every one shows its **funding source first** and has a mandatory `source`.
 
@@ -21,7 +53,8 @@ All need the **grant level** (setting "Who may give grants", default Minister). 
 |---|---|
 | `/transfer raws nations days source [source_member] [lock_id] [no_cash] [no_daily_cash] [only_missing] [note]` | Resources each nation needs for `days` (decimals allowed), from its **actual buildings, infrastructure and military** |
 | `/grant warchest nations source [ratio] [only_missing] …` | ECON's resources-per-city x city count x `ratio` (1, 1.1, 1.5, 2, 2.5 …). 12 cities, ratio 1 = 12,000 food / 1,200 steel / 1,200 aluminum; ratio 2 = double |
-| `/grant city nation number_of_cities source …` | Money for the next city (or up to 10), with the nation's own city-cost discounts |
+| `/grant city nation source [number_of_cities] [up_to] …` | Money for new cities, or up to a city number (max 50 at once), with the nation's own discounts |
+| `/grant project nations project source [only_missing] …` | The money and resources to buy a project (see 1c) |
 | `/grant infrastructure nations source [target_infrastructure] …` | Money to raise **each city** from its **own** infrastructure to the target (cities already there cost nothing) |
 | `/grant land nations source [target_land] …` | Same for land |
 | `/grantset show / warchest / infra / land / citycap / dailycash / rules / live / batch / resume` | Settings (Minister), the rules sheet, the **live switch (Admin)**, and the full record of any batch |
@@ -76,7 +109,7 @@ Clears **every** alliance's recorded share of the shared offshore so you can ass
 ## 7. New settings, permissions, migration
 * Settings (page "Grants & transfers" in `/bankset config`): warchest per city, infrastructure/land targets and per-nation caps, city cap, daily-bonus threshold, which kinds may send, donation note on/off, most nations per command.
 * New permission flags: `disburse_member_available`, `disburse_member_locked` (assign with `/bankset setaccess`).
-* Migration **`016_disbursements.sql`**, additive: `disbursement_batches` and `disbursement_items` (what was calculated can never be edited or deleted; only outcomes update). Nothing existing is touched.
+* Migrations **`016_disbursements.sql`** and **`017_project_grants.sql`** (the second rebuilds those two tables to allow the new `PROJECT_GRANT` kind, copying every row back unchanged, and adds the catalogue versions table), additive: `disbursement_batches` and `disbursement_items` (what was calculated can never be edited or deleted; only outcomes update). Nothing existing is touched.
 * No new environment variables.
 
 ## 8. Applying it

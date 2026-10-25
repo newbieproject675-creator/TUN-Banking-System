@@ -40,16 +40,33 @@ async def main(argv) -> int:
     url = os.environ.get("PNW_API_URL", "https://api.politicsandwar.com/graphql")
     bad = 0
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
-        for type_name, needed in (("Nation", P.NATION_SCALAR_FIELDS + P.NATION_PROJECT_FIELDS), ("City", P.CITY_FIELDS)):
-            status, body = await gql(s, url, key, '{ __type(name:"%s"){ fields{ name } } }' % type_name)
+        for type_name, needed in (("Nation", P.NATION_SCALAR_FIELDS + P.NATION_PROJECT_FIELDS + P.NATION_OPTIONAL_FIELDS), ("City", P.CITY_FIELDS)):
+            status, body = await gql(s, url, key, '{ __type(name:"%s"){ fields{ name type{ name kind ofType{ name kind } } } } }' % type_name)
             if status != 200 or not body.get("data", {}).get("__type"):
                 print(f"{type_name}: could not read the schema (HTTP {status}). Introspection may be disabled; use --nation instead.")
                 bad += 1
                 continue
-            have = {f["name"] for f in body["data"]["__type"]["fields"]}
+            fields = body["data"]["__type"]["fields"]
+            have = {f["name"] for f in fields}
             missing = [f for f in needed if f not in have]
-            print(f"{type_name}: {len(needed) - len(missing)}/{len(needed)} fields exist" + (f"  MISSING: {', '.join(missing)}" if missing else "  OK"))
-            bad += bool(missing)
+            optional = set(P.NATION_PROJECT_FIELDS) | set(P.NATION_OPTIONAL_FIELDS) | (set(P.CITY_FIELDS) - {"id", "infrastructure", "land"})
+            hard = [f for f in missing if f not in optional]
+            soft = [f for f in missing if f in optional]
+            print(f"{type_name}: {len(needed) - len(missing)}/{len(needed)} fields exist"
+                  + (f"  MISSING (required): {', '.join(hard)}" if hard else "")
+                  + (f"  missing but optional (the bot works around them): {', '.join(soft)}" if soft else "") + ("  OK" if not missing else ""))
+            bad += bool(hard)
+            if type_name == "Nation":
+                # is the project catalogue complete? every project is a Boolean field on Nation: list the ones the catalogue does not know
+                from tunbank import projects as PJ
+                known = set(PJ.load_seed().projects) | set(P.NATION_PROJECT_FIELDS)
+                booleans = sorted(f["name"] for f in fields if "Boolean" in (f["type"].get("name") or "") + ((f["type"].get("ofType") or {}).get("name") or ""))
+                extra = [b for b in booleans if b not in known]
+                print(f"Projects: the built-in catalogue knows {len(known)} project identifiers. PnW has {len(booleans)} Boolean fields on Nation; "
+                      f"not in the catalogue (some are projects, some are not): {', '.join(extra) if extra else 'none'}")
+                gone = sorted(k for k in PJ.load_seed().projects if k not in have)
+                if gone:
+                    print(f"Catalogue entries PnW has no field for (wrong identifier or removed project): {', '.join(gone)}")
         if "--nation" in argv:
             nid = int(argv[argv.index("--nation") + 1])
             client = P.PnWClient.__new__(P.PnWClient)
